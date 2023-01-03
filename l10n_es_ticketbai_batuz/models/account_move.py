@@ -191,16 +191,29 @@ class AccountMove(models.Model):
         self.ensure_one()
         return self.name
 
-    def batuz_get_supplier_serie_factura(self):
-        """Consultamos a hacienda cómo extraer la serie de una factura de proveedor.
-        Al no ser posible en algunos casos, decidimos tomar ciertos caracteres
-        como serie y el resto como número.
-        Aunque la serie no es obligatoria en facturas recibidas,
-        sí lo es en las rectificativas, por lo que es necesario informarla siempre."""
-        return self.ref[:3]
-
-    def batuz_get_supplier_num_factura(self):
-        return self.ref[3:]
+    def batuz_split_supplier_invoice_number(self):
+        """Localiza separadores y divide el número de factura por el más cercano a la mitad.
+        Si no contiene separadores y supera los 20 caracteres lo divide por la mitad.
+        Para otros casos coge los 3 primeros números como serie,
+         y el resto como número de factura según consulta realizada a hacienda"""
+        invoice_ref = {}
+        separators = dict()
+        for pos, c in enumerate(self.ref):
+            if not c.isalnum():
+                separators[pos] = c
+        if len(separators):
+            separator_length = min(
+                separators.keys(), key=lambda x: abs(x - len(self.ref) / 2)
+            )
+            invoice_ref["serial"] = self.ref[:separator_length]
+            invoice_ref["number"] = self.ref[separator_length + 1 :]
+        elif len(self.ref) > 20:
+            invoice_ref["serial"] = self.ref[: int(len(self.ref) / 2)]
+            invoice_ref["number"] = self.ref[int(len(self.ref) / 2) :]
+        else:
+            invoice_ref["serial"] = self.ref[:3]
+            invoice_ref["number"] = self.ref[3:]
+        return invoice_ref
 
     def _get_lroe_identifier(self):
         """Get the LROE structure for a partner identifier.
@@ -263,8 +276,9 @@ class AccountMove(models.Model):
         tipo_factura = "F2" if self._is_lroe_simplified_invoice() else "F1"
         last_number = self._get_last_move_number()
         header = OrderedDict()
-        header["SerieFactura"] = self.batuz_get_supplier_serie_factura()[:20]
-        header["NumFactura"] = self.batuz_get_supplier_num_factura()[:20]
+        invoice_ref = self.batuz_split_supplier_invoice_number()
+        header["SerieFactura"] = invoice_ref["serial"][:20]
+        header["NumFactura"] = invoice_ref["number"][:20]
         if last_number:
             # NumFacturaFin = número de la factura que identifica a la
             #  última factura cuando se trata de un asiento resumen de facturas
@@ -283,6 +297,7 @@ class AccountMove(models.Model):
                 origin_date = self._change_date_format(
                     self.reversed_entry_id.invoice_date
                 )
+                invoice_ref = origin.batuz_split_supplier_invoice_number()
                 header["FacturasRectificadasSustituidas"] = OrderedDict(
                     [
                         (
@@ -291,11 +306,11 @@ class AccountMove(models.Model):
                                 [
                                     (
                                         "SerieFactura",
-                                        origin.batuz_get_supplier_serie_factura()[:20],
+                                        invoice_ref["serial"][:20],
                                     ),
                                     (
                                         "NumFactura",
-                                        origin.batuz_get_supplier_num_factura()[:20],
+                                        invoice_ref["number"][:20],
                                     ),
                                     ("FechaExpedicionFactura", origin_date),
                                 ]
@@ -537,6 +552,7 @@ class AccountMove(models.Model):
             invoice_date = self._change_date_format(self.invoice_date)
             lroe_identifier = self._get_lroe_identifier()
             lroe_identifier.pop("ApellidosNombreRazonSocial")
+            invoice_ref = self.batuz_split_supplier_invoice_number()
             id_gasto = OrderedDict(
                 [
                     (
@@ -545,11 +561,11 @@ class AccountMove(models.Model):
                             [
                                 (
                                     "SerieFactura",
-                                    self.batuz_get_supplier_serie_factura()[:20],
+                                    invoice_ref["serial"][:20],
                                 ),
                                 (
                                     "NumFactura",
-                                    self.batuz_get_supplier_num_factura[:20],
+                                    invoice_ref["number"][:20],
                                 ),
                                 ("FechaExpedicionFactura", invoice_date),
                                 ("EmisorFacturaRecibida", lroe_identifier),
@@ -597,8 +613,9 @@ class AccountMove(models.Model):
             lroe_identifier.pop("ApellidosNombreRazonSocial")
             last_number = self._get_last_move_number()
             id_recibida = OrderedDict()
-            id_recibida["SerieFactura"] = self.batuz_get_supplier_serie_factura()[:20]
-            id_recibida["NumFactura"] = self.batuz_get_supplier_num_factura()[:20]
+            invoice_ref = self.batuz_split_supplier_invoice_number()
+            id_recibida["SerieFactura"] = invoice_ref["serial"][:20]
+            id_recibida["NumFactura"] = invoice_ref["number"][:20]
             if last_number:
                 id_recibida["NumFacturaFin"] = last_number[:20]
             id_recibida["FechaExpedicionFactura"] = invoice_date
